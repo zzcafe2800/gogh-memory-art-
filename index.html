@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ゴッホ思い出アート（非公式）</title>
+<title>ゴッホ思い出アート</title>
 <style>
 @font-face{font-family:"AppFont";src:url(assets/font-main.ttf) format("truetype");font-display:swap}
 :root{
@@ -108,6 +108,8 @@ details label{display:block;font-size:12px;margin-top:6px}
 #tileProg{display:none!important}
 /* ---------- 素材（引き出し） ---------- */
 #s1{grid-column:1/-1;padding:16px 18px}
+#colors{grid-column:1/-1;padding:16px 22px 12px;margin-top:10px}
+#colorBars{height:130px;margin-top:4px}
 .stats{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 .stat{background:#f3e8cf;border-radius:10px;padding:4px 12px;font-size:12px}
 .stat b{font-size:15px;margin-right:4px}
@@ -185,6 +187,9 @@ h4{font:600 12px var(--serif);letter-spacing:.12em;color:var(--sub);margin:12px 
 #flowPct{margin:0;color:#e0332b;font:600 22px var(--serif);letter-spacing:.06em;text-shadow:0 0 12px rgba(255,255,255,.9)}
 .flowBtn{padding:15px 34px;font-size:15px;letter-spacing:.24em;box-shadow:0 10px 30px rgba(29,43,79,.3)}
 #flowTgtImg{display:block;width:min(260px,50vw);aspect-ratio:4/3;object-fit:cover;-webkit-mask-image:linear-gradient(90deg,transparent,#000 22px,#000 calc(100% - 22px),transparent),linear-gradient(180deg,transparent,#000 22px,#000 calc(100% - 22px),transparent);-webkit-mask-composite:source-in;mask-composite:intersect}
+#tips{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:63;margin:0;max-width:min(560px,86vw);background:rgba(255,255,255,.78);color:var(--ink);font-size:12.5px;line-height:1.5;padding:7px 16px;border-radius:999px;box-shadow:0 0 18px 8px rgba(255,255,255,.35);transition:opacity .6s;pointer-events:none;text-align:center}
+#tips b{color:#e0332b;margin-right:8px;letter-spacing:.1em}
+#tips.fade{opacity:0}
 #bgmBtn{position:fixed;right:18px;bottom:18px;z-index:70;width:42px;height:42px;border-radius:50%;border:0;background:rgba(255,255,255,.8);color:var(--ink);display:grid;place-items:center;cursor:pointer;box-shadow:0 0 18px 8px rgba(255,255,255,.55);transition:opacity .2s}
 #bgmBtn svg{width:20px;height:20px;display:block}
 #bgmBtn .slash{display:none}#bgmBtn.off .slash{display:inline}#bgmBtn.off{opacity:.55}
@@ -226,6 +231,7 @@ h4{font:600 12px var(--serif);letter-spacing:.12em;color:var(--sub);margin:12px 
   <label class="pill flowBtn"><span id="flowPickTxt">作る画像を選ぶ</span><input type="file" id="flowTarget" accept="image/*" hidden></label>
   <p id="flowPct">0%</p>
 </div>
+<p id="tips" hidden><b>TIPS</b><span id="tipsTxt"></span></p>
 <button id="bgmBtn" type="button" aria-label="BGM" aria-pressed="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/><path class="slash" d="M3 3l18 18"/></svg></button>
 
 <!-- ============ アプリ本体 ============ -->
@@ -270,6 +276,7 @@ h4{font:600 12px var(--serif);letter-spacing:.12em;color:var(--sub);margin:12px 
             <label for="adjC">鮮やかさ ±<output id="adjCOut">35</output>%</label><input type="range" id="adjC" min="0" max="80" step="5" value="35">
             <label for="adjH">色相 ±<output id="adjHOut">12</output>°</label><input type="range" id="adjH" min="0" max="45" step="1" value="12">
           </details></div></div>
+        <div class="row"><span class="k">同じ写真</span><div class="v"><div class="seg" id="capSeg"><button data-v="0" class="on">自動</button><button data-v="1">1</button><button data-v="2">2</button><button data-v="3">3</button><button data-v="4">4</button><button data-v="6">6</button><button data-v="10">10</button></div></div></div>
         <div class="row"><span class="k">離す</span><div class="v"><div class="seg" id="spreadSeg"><button data-v="0">なし</button><button data-v="1">少し</button><button data-v="2" class="on">しっかり</button></div><p id="reuseInfo"></p></div></div>
         <div class="sub" id="gridOpts">
           <div class="row"><span class="k">形</span><div class="v"><div class="seg" id="aspSeg"><button data-v="sq" class="on">□</button><button data-v="land">横</button><button data-v="port">縦</button></div></div></div>
@@ -285,6 +292,10 @@ h4{font:600 12px var(--serif);letter-spacing:.12em;color:var(--sub);margin:12px 
       </div>
     </aside>
     <!-- 素材（引き出し） -->
+    <section class="panel" id="colors" hidden>
+      <div class="stageHead"><h3>入れた写真の色の割合</h3></div>
+      <div class="huebars" id="colorBars"></div>
+    </section>
     <section class="panel" id="s1" hidden>
       <div class="progress" id="tileProg" hidden><div class="bar"></div><span class="ptext"></span></div>
       <div id="tileSummary" hidden>
@@ -483,7 +494,7 @@ function adjInfo(tm, cm, lim) {
 /* ================= 状態 ================= */
 const ASPECTS = { sq: { w: 1, h: 1 }, land: { w: 4, h: 3 }, port: { w: 3, h: 4 } };
 const S = { tiles: [], keys: new Set(), failed: 0, target: null, results: [], result: null, busy: false, version: 0, tfCache: new Map(), meanCache: null, sheet: null };
-const ST = { mode: 'grid', dots: 0, spread: 2, aspect: 'sq', g: 5, adjL: 18, adjC: 35, adjH: 12,
+const ST = { mode: 'grid', dots: 0, capSel: 0, spread: 2, aspect: 'sq', g: 5, adjL: 18, adjC: 35, adjH: 12,
   fmax: 6, farea: 30, fvar: 2, check: true, sheetMode: 'photo', view: 'mosaic', fmt: 'png' };
 const activeIdx = () => { const a = []; for (let i = 0; i < S.tiles.length; i++) if (!S.tiles[i].excluded) a.push(i); return a; };
 const activeCount = () => { let n = 0; for (const t of S.tiles) if (!t.excluded) n++; return n; };
@@ -654,6 +665,7 @@ async function addTileFiles(files) {
   const thumbLong = thumbSizeFor(S.tiles.length + list.length);
   let done = 0, fail = 0;
   const fp = $('#flowPick'); syncFlowPick(); $('#flowPct').textContent = '0%'; fp.classList.remove('out'); fp.hidden = false; // 読み込み中でも作る画像は選べる
+  Tips.start();
   Flow.start(S.tiles); // 読み込みながら、写真が奥行きをもって流れていく演出（ボタン以外の操作はできない）
   $('#intro').classList.add('gone');
   try {
@@ -666,7 +678,7 @@ async function addTileFiles(files) {
   } finally { prog.hide(); }
   S.failed += fail; S.version++;
   await Flow.finish(() => fp.classList.add('out'));
-  fp.hidden = true;
+  fp.hidden = true; Tips.stop();
   setBusy(false);
   showApp();
   if (fail) toast(`${fail} 枚は読み込めませんでした`);
@@ -682,7 +694,7 @@ function showApp() {
 
 function onTilesChanged() {
   const n = S.tiles.length, ex = n - activeCount();
-  $('#tileSummary').hidden = n === 0;
+  $('#tileSummary').hidden = n === 0; $('#colors').hidden = n === 0 || !$('#s4').hidden;
   $('#chipCount').textContent = fmt(n - ex);
   $('#stCount').textContent = fmt(n); $('#stUse').textContent = fmt(n - ex);
   $('#stEx').textContent = fmt(ex); $('#stExWrap').hidden = ex === 0;
@@ -711,7 +723,7 @@ function drawHueBars() {
   const counts = new Array(BINS.length).fill(0); let n = 0;
   for (const t of S.tiles) if (!t.excluded) { counts[t.bin]++; n++; }
   n = Math.max(1, n); const mx = Math.max(1, ...counts);
-  $('#hueBars').innerHTML = counts.map((c, k) => `<div class="hb" title="${BINS[k][0]}: ${c}枚"><div class="hbTrack"><div class="hbBar" style="height:${Math.max(1.5, c / mx * 100)}%;background:${BINS[k][1]}"></div></div><div class="hbLab">${BINS[k][0]}<br>${Math.round(c / n * 100)}%</div></div>`).join('');
+  $('#hueBars').innerHTML = $('#colorBars').innerHTML = counts.map((c, k) => `<div class="hb" title="${BINS[k][0]}: ${c}枚"><div class="hbTrack"><div class="hbBar" style="height:${Math.max(1.5, c / mx * 100)}%;background:${BINS[k][1]}"></div></div><div class="hbLab">${BINS[k][0]}<br>${Math.round(c / n * 100)}%</div></div>`).join('');
   const order = counts.map((c, k) => [c, k]).sort((a, b) => b[0] - a[0]);
   const many = order.filter(([c]) => c / n >= 0.1).slice(0, 3).map(([, k]) => BINS[k][0]);
   const few = counts.map((c, k) => [c, k]).filter(([c, k]) => k < 12 && c / n < 0.015).map(([, k]) => BINS[k][0]);
@@ -860,14 +872,21 @@ function curDots() { return clamp(ST.dots || (S.target && S.target.autoDots) || 
 // 同じ写真を使える回数は、ドット数に比例して自動で決める（ドット数の 1.25 倍の枠を用意して、色の合う写真を選ぶ余裕を残す）
 const REUSE_K = 1.25, SPREAD_F = [0, 0.3, 0.6], USE_W = 150;
 const capFor = (C, T, free) => Math.max(1, Math.ceil(C * REUSE_K / ((free ? 2 : 1) * Math.max(1, T)) - 1e-9));
-// 色の合う写真が足りない所だけ少し超えてよいが、この回数（上限＋3分の1）は絶対に超えない
-const hardCapOf = cap => cap + Math.max(1, Math.round(cap / 3));
+// 上限は絶対に超えない
+const hardCapOf = cap => cap;
+// 同じ写真を使う上限：自動なら、ドット数と写真の枚数から 1〜4 くらいに抑える。
+// きっちり並べるときは「全部のドットが埋まる回数」より少なくはできない
+function capOf(C, T, free) {
+  const minC = free ? 1 : Math.max(1, Math.ceil(C / Math.max(1, T) - 1e-9));
+  const want = ST.capSel > 0 ? ST.capSel : Math.min(4, capFor(C, T, free));
+  return Math.max(minC, want);
+}
 // 元画像 tg に対する「ドットの並び」「同じ写真を使う上限」「同じ写真どうしをあける距離」
 function planFor(tg, dotsWanted) {
   const free = ST.mode === 'free', asp = free ? 'sq' : ST.aspect, T = Math.max(1, activeCountFor(tg));
   const gr = gridRatioOf(tg, asp), want = clamp(dotsWanted || curDots(), DOTS_MIN, dotsMax());
   const cols = Math.max(2, Math.round(Math.sqrt(want * gr))), rows = Math.max(2, Math.round(cols / gr)), C = cols * rows;
-  const cap = capFor(C, T, free); // 自由レイアウトは1枚が平均2ドットくらいを覆う
+  const cap = capOf(C, T, free);
   const f = SPREAD_F[ST.spread];
   const d = cap <= 1 || f === 0 ? 0 : Math.max(1, Math.round(f * Math.sqrt(C / cap)) - (free ? 1 : 0));
   return { cols, rows, C, cap, d, T, asp };
@@ -895,7 +914,7 @@ function updateGridUI() {
   $('#dotsOut').textContent = fmt(p.C);
   $('#dotsInfo').innerHTML = `<b>${fmt(p.C)}</b> ドット（${p.cols}×${p.rows}）　おすすめ ${fmt(DOTS_REC[0])}〜${fmt(DOTS_REC[1])}`;
   const rg = getRelated();
-  $('#reuseInfo').innerHTML = (`同じ写真 最大 <b>${hardCapOf(p.cap)}</b> 回` + (p.d > 0 ? `・<b>${p.d}</b> マス離す` : '')) + (rg.pairs ? `　⏱ 3分以内 ${fmt(rg.pairs)} 組` : '');
+  $('#reuseInfo').innerHTML = (`同じ写真 最大 <b>${p.cap}</b> 回` + (ST.capSel > 0 && p.cap > ST.capSel ? `（${fmt(p.C)} ドットを埋めるため）` : '') + (p.d > 0 ? `・<b>${p.d}</b> マス離す` : '')) + (rg.pairs ? `　⏱ 3分以内 ${fmt(rg.pairs)} 組` : '');
 }
 
 let dotTimer = 0;
@@ -1619,10 +1638,10 @@ async function buildWithAnim(tg, prog, prefix, lo, hi) {
 async function build() {
   if (!S.target || S.busy) return;
   setBusy(true); const prog = progress('#buildProg'); let R = null;
-  Make.start(S.target);
+  Make.start(S.target); Tips.start();
   try { R = await buildWithAnim(S.target, prog, '', 0, 1); await Make.end(); }
   catch (e) { console.error(e); Make.abort(); toast('作成中にエラーが起きました: ' + e.message, 6000); }
-  finally { prog.hide(); setBusy(false); }
+  finally { prog.hide(); setBusy(false); Tips.stop(); }
   if (R) addResult(R);
 }
 // ===== 手順3の「完成予想（簡易）」：写真をそれぞれ1〜数色に単純化して、いまの設定で当てはめた様子をすばやく見せる =====
@@ -1840,7 +1859,10 @@ const Flow = (() => {
       return new Promise(res => {
         if (cv.hidden) { res(); return; }
         const wait = Math.max(0, 3200 - (performance.now() - t0)); // 少なくとも3秒くらいは見せる
-        setTimeout(() => { if (onEnding) onEnding(); ending = { at: performance.now(), cb: res }; }, wait);
+        setTimeout(() => {
+          if (onEnding) onEnding(); const e = ending = { at: performance.now(), cb: res };
+          setTimeout(() => { if (ending === e) { stop(); ending = null; res(); } }, 2500); // 画面が止まっていても終わらせる
+        }, wait);
       });
     },
   };
@@ -1971,7 +1993,12 @@ const Make = (() => {
       return new Promise(res => {
         if (cv.hidden) { res(); return; }
         target = 1;
-        const tick = () => { if (shown > 0.985 || performance.now() - t0 > MIN_MS * 1.4) ending = { at: performance.now(), cb: res }; else setTimeout(tick, 120); };
+        const tick = () => {
+          if (shown > 0.985 || performance.now() - t0 > MIN_MS * 1.4 || document.hidden) {
+            const e = ending = { at: performance.now(), cb: res };
+            setTimeout(() => { if (ending === e) { ending = null; cancelAnimationFrame(raf); cv.hidden = true; lockInput(false); YMS = 40; res(); } }, 4000); // 画面が止まっていても終わらせる
+          } else setTimeout(tick, 120);
+        };
         tick();
       });
     },
@@ -2146,7 +2173,7 @@ function updateThumb(R) {
 // 「作る」画面と「できあがり」画面を切り替える（保存は、作ったあとの画面にだけ出す）
 function setStudioView(v) {
   const res = v === 'result';
-  $('#s3view').hidden = res; $('#s3').hidden = res; $('#s4').hidden = !res;
+  $('#s3view').hidden = res; $('#s3').hidden = res; $('#s4').hidden = !res; $('#colors').hidden = res || !S.tiles.length;
   if (res) $('#s1').hidden = true; else scheduleDotPreview();
   window.scrollTo(0, 0);
 }
@@ -2414,7 +2441,7 @@ async function rankTargets(onP) {
   const active = activeIdx(), T = active.length, lim = curLim();
   // いまの設定のドット数と、同じ写真を使える回数（planFor と同じ考え方）
   const Ccells = Math.max(1, ST.mode === 'free' ? curDots() / 2 : curDots());
-  const rep = Math.max(1, Math.ceil(Ccells * REUSE_K / Math.max(1, T - 1) - 1e-9));
+  const rep = capOf(Ccells, T - 1, false);
   // 素材の色を Kc 個のグループにまとめる（k-means）
   const Kc = clamp(Math.round(T / 10), 8, 64), pts = new Float32Array(T * 3);
   active.forEach((ti, i) => { const l = S.tiles[ti].lab; pts[i * 3] = l[0]; pts[i * 3 + 1] = l[1]; pts[i * 3 + 2] = l[2]; });
@@ -2570,6 +2597,7 @@ setupSeg('#adjSeg', v => { const p = ADJ_PRESETS[v]; setAdj(p[0], p[1], p[2]); }
 ['adjL', 'adjC', 'adjH'].forEach(id => $('#' + id).addEventListener('input', () => { setSeg($('#adjSeg'), ''); setAdj(+$('#adjL').value, +$('#adjC').value, +$('#adjH').value); }));
 setupSeg('#modeSeg', v => { ST.mode = v; onSettingsChanged(); });
 setupSeg('#sheetSeg', v => { ST.sheetMode = v; drawSheet(); });
+setupSeg('#capSeg', v => { ST.capSel = +v; onSettingsChanged(); });
 setupSeg('#spreadSeg', v => { ST.spread = +v; onSettingsChanged(); });
 setupSeg('#aspSeg', v => { ST.aspect = v; onSettingsChanged(); });
 setupSeg('#gSeg', v => { ST.g = +v; });
@@ -2601,6 +2629,26 @@ $('#flowTarget').addEventListener('change', e => { const f = e.target.files[0]; 
 $('#backBtn').addEventListener('click', () => setStudioView('make'));
 let rzTimer = 0;
 window.addEventListener('resize', () => { clearTimeout(rzTimer); rzTimer = setTimeout(() => { if (S.tiles.length) { drawSheet(); drawBgArt(); } if (S.target) scheduleDotPreview(); if (S.result && !$('#s4').hidden) fitView(); }, 200); });
+
+/* ================= 待ち時間に出す TIPS（小さく、順番に切り替わる） ================= */
+const Tips = (() => {
+  const LIST = [
+    '作る画像は、形がはっきりしたシンプルな絵や写真ほど、きれいに仕上がります',
+    '入れた写真の色の割合が、作る画像の色に近いほど、きれいに作れます',
+    '写真の枚数が多いほど、同じ写真のくり返しが少なくなります',
+    '「おまかせ」を使うと、きれいに作れる写真を順番に選べます',
+    '細かさを上げると絵がくっきり、下げると一枚一枚の写真が大きく見えます',
+    '色が足りないときは、その色の写真を足すと元の画像に近づきます',
+    '精度を上げると、写真の中の明るい所・暗い所まで合わせて置きます',
+    'できあがった絵をクリックすると、そこに使われた写真を見られます',
+  ];
+  const el = $('#tips'), tx = $('#tipsTxt'); let timer = 0, k = (Math.random() * LIST.length) | 0, n = 0;
+  const next = () => { el.classList.add('fade'); setTimeout(() => { tx.textContent = LIST[k++ % LIST.length]; el.classList.remove('fade'); }, 600); };
+  return {
+    start() { n++; if (n > 1) return; tx.textContent = LIST[k++ % LIST.length]; el.classList.remove('fade'); el.hidden = false; timer = setInterval(next, 7000); },
+    stop() { n = Math.max(0, n - 1); if (n) return; clearInterval(timer); el.hidden = true; },
+  };
+})();
 
 /* ================= BGM（最初に画面を触ったときから、ループで流す） ================= */
 // 音源は、そのまま音声ファイルとして取り出せないよう並べ替えた形で置いてあり、ここで元に戻して再生する
