@@ -746,6 +746,7 @@ async function addTileFiles(files) {
   showApp();
   if (fail) toast(`${fail} 枚は読み込めませんでした`);
   onTilesChanged();
+  const ver = S.version; lifeCandidates().then(l => { if (S.version === ver) { S.life = l; S.lifeVer = ver; } }); // 思い出の候補（連写をまとめ、顔らしいものを選んだもの）
 }
 // 最初の画面 → アプリ本体へ
 function showApp() {
@@ -2033,7 +2034,7 @@ const Make = (() => {
     // ときどき1〜5枚の思い出が手前に現れて、絵の中へ吸い込まれていく（時間が離れていて、色の違う写真）
     if (!ending && now > nextHl && photos.length) {
       const n = 1 + ((Math.random() * 5) | 0);
-      hls = pickHighlights(photos, n).map((t, k) => ({ t, at: now, k, n, tx: Math.random(), ty: Math.random() }));
+      hls = pickHighlights(S.life && S.lifeVer === S.version && S.life.length >= 5 ? S.life : photos, n).map((t, k) => ({ t, at: now, k, n, tx: Math.random(), ty: Math.random() }));
       nextHl = now + 3600 + Math.random() * 1800;
     }
     const shows = [];
@@ -2900,8 +2901,7 @@ const Timelapse = (() => {
   function drawPhoto(i, alpha, age) {
     const t = frames[i]; if (!t) return;
     const src = ready.get(i) || t.thumb, sw = src.width, sh = src.height;
-    const k = Math.max(W / sw, H / sh) * (1.02 + 0.04 * Math.min(1, age / 5)), w = sw * k, h = sh * k; // 画面いっぱい（少しずつ寄る）
-    ctx.globalAlpha = alpha; ctx.drawImage(src, W / 2 - w / 2, H / 2 - h / 2, w, h); ctx.globalAlpha = 1;
+    void sw; void sh; ctx.globalAlpha = alpha; drawFit(ctx, src, W, H, 1 + 0.03 * Math.min(1, age / 5)); ctx.globalAlpha = 1; // 切り取らずに全体（少しずつ寄る）
   }
   function frame(now) {
     const sec = (now - t0) / 1000, F = frames.length;
@@ -3066,6 +3066,15 @@ function GifWriter(W, H) {
 }
 
 /* ================= GIF（タイムラプス）：全画面の写真に、撮った日時をのせる ================= */
+// 写真を切り取らずに全体を見せる。まわりは同じ写真をぼかして暗くしたもので埋める
+const FIT_BG = new WeakMap();
+function drawFit(ctx, img, W, H, zoom = 1) {
+  let bg = FIT_BG.get(img);
+  if (!bg) { bg = document.createElement('canvas'); bg.width = 96; bg.height = Math.max(1, Math.round(96 * img.height / img.width)); const b = bg.getContext('2d'); b.filter = 'blur(3px) brightness(.5) saturate(1.1)'; b.drawImage(img, 0, 0, bg.width, bg.height); FIT_BG.set(img, bg); }
+  drawCover(ctx, bg, W, H, 1.15);
+  const k = Math.min(W / img.width, H / img.height) * 0.96 * zoom, w = img.width * k, h = img.height * k;
+  ctx.drawImage(img, (W - w) / 2, (H - h) / 2, w, h);
+}
 function drawCover(ctx, img, W, H, zoom = 1) { const k = Math.max(W / img.width, H / img.height) * zoom, w = img.width * k, h = img.height * k; ctx.drawImage(img, (W - w) / 2, (H - h) / 2, w, h); }
 function drawDateOverlay(ctx, W, H, t) {
   const g = ctx.createLinearGradient(0, H * 0.5, 0, H); g.addColorStop(0, 'rgba(6,10,28,0)'); g.addColorStop(1, 'rgba(6,10,28,.6)');
@@ -3105,8 +3114,8 @@ const GIF = (() => {
   }
   function render(ctx, W, H, A, ia, B, ib, mix) {
     ctx.fillStyle = '#0b1430'; ctx.fillRect(0, 0, W, H);
-    drawCover(ctx, ia || A.thumb, W, H);
-    if (B && mix > 0) { ctx.globalAlpha = mix; drawCover(ctx, ib || B.thumb, W, H); ctx.globalAlpha = 1; }
+    drawFit(ctx, ia || A.thumb, W, H);
+    if (B && mix > 0) { ctx.globalAlpha = mix; drawFit(ctx, ib || B.thumb, W, H); ctx.globalAlpha = 1; }
     drawDateOverlay(ctx, W, H, mix >= 0.5 && B ? B : A);
   }
   function startPreview() {
