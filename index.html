@@ -397,7 +397,6 @@ input[type=range]:active{transform:scaleY(1.3)}
           <div id="gifOpts" hidden>
             <h3>GIF</h3>
             <div class="row"><span class="k">画質</span><div class="v"><div class="seg" id="gfQ"><button data-v="480">小</button><button data-v="720" class="on">中</button><button data-v="1080">大</button></div></div></div>
-            <div class="row"><span class="k">使用割合</span><div class="v"><input type="range" id="gfRatio" min="1" max="100" step="1" value="15"></div></div>
             <div class="row"><span class="k">1枚</span><div class="v"><input type="range" id="gfPer" min="1" max="10" step="0.5" value="5"></div></div>
             <div class="row"><span class="k">時間</span><div class="v"><input type="range" id="gfSec" min="4" max="120" step="1" value="30"></div></div>
             <p class="mini" id="gfInfo"></p>
@@ -2752,7 +2751,6 @@ $('#checkOn').addEventListener('change', e => { ST.check = e.target.checked; });
 setupSeg('#viewSeg', v => { ST.view = v; drawView(); });
 setupSeg('#fmtSeg', v => { const g = v === 'gif'; if (g !== GIF.on) setGifMode(g); ST.fmt = v; });
 setupSeg('#gfQ', v => GIF.setQ(v));
-$('#gfRatio').addEventListener('input', e => GIF.setRatio(+e.target.value));
 $('#gfSec').addEventListener('input', e => GIF.setSec(+e.target.value));
 $('#gfPer').addEventListener('input', e => GIF.setPer(+e.target.value));
 $('#gfRec').addEventListener('click', () => GIF.recommend());
@@ -3101,12 +3099,12 @@ const GIF = (() => {
   }
   // おすすめ：写真の15%くらい（6〜24枚）、1枚5秒
   function recommend(restart = true) { const N = st.cands.length; st.per = 5; st.count = clamp(Math.round(N * 0.15), Math.min(N, 6), Math.min(N, 24)); st.sec = st.count * st.per; sync(); if (restart) startPreview(); }
+  function fit() { st.count = clamp(Math.round(st.sec / st.per), 1, st.cands.length); if (st.count * st.per < st.sec - st.per / 2) st.sec = Math.round(st.count * st.per); }
   function sync() {
     const N = st.cands ? st.cands.length : 0;
-    $('#gfRatio').value = N ? Math.max(1, Math.round(st.count / N * 100)) : 1;
-    $('#gfSec').min = Math.max(1, st.count); $('#gfSec').max = Math.max(st.count, st.count * 10); $('#gfSec').value = st.sec; $('#gfPer').value = st.per;
+    $('#gfSec').min = 4; $('#gfSec').max = Math.max(20, N * 10); $('#gfSec').value = st.sec; $('#gfPer').value = st.per;
     setSeg($('#gfQ'), st.q);
-    $('#gfInfo').innerHTML = N ? `<b>${st.count}</b> 枚・1枚 約 <b>${st.per.toFixed(1)}</b> 秒・全部で <b>${st.sec}</b> 秒（候補 ${fmt(N)} 枚）` : 'ファイル名が時刻の写真がないので作れません';
+    $('#gfInfo').innerHTML = N ? `<b>${st.count}</b> 枚・1枚 <b>${st.per.toFixed(1)}</b> 秒・全部で <b>${Math.round(st.count * st.per)}</b> 秒（候補 ${fmt(N)} 枚）` : 'ファイル名が時刻の写真がないので作れません';
   }
   const frameList = () => pickSpread(st.cands, Math.max(1, Math.min(st.count, st.cands.length)));
   function load(t, w) {
@@ -3161,9 +3159,9 @@ const GIF = (() => {
   return {
     open, close, save, get on() { return on; },
     setQ(v) { st.q = +v; },
-    setRatio(v) { if (!st.cands) return; st.count = Math.max(1, Math.round(v / 100 * st.cands.length)); st.sec = Math.round(st.count * st.per); sync(); startPreview(); },
-    setPer(v) { if (!st.cands) return; st.per = +v; st.sec = Math.round(st.count * st.per); sync(); startPreview(); },
-    setSec(v) { if (!st.cands) return; st.per = clamp(Math.round(+v / Math.max(1, st.count) * 2) / 2, 1, 10); st.sec = Math.round(st.count * st.per); sync(); startPreview(); }, // 時間は1枚の秒数を変える（使用割合は動かさない）
+    // 枚数は「全体の時間 ÷ 1枚の秒数」で決まる。1枚の秒数と全体の時間は、それぞれ独立に動かせる
+    setPer(v) { if (!st.cands) return; st.per = +v; fit(); sync(); startPreview(); },
+    setSec(v) { if (!st.cands) return; st.sec = +v; fit(); sync(); startPreview(); },
     recommend, refresh() { if (on) startPreview(); },
   };
 })();
