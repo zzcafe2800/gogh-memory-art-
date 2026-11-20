@@ -205,6 +205,17 @@ h4{font:600 12px var(--serif);letter-spacing:.12em;color:var(--sub);margin:12px 
 #toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(10px);background:rgba(35,28,21,.94);color:#fff;padding:9px 16px;border-radius:12px;font-size:.85rem;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;z-index:95;max-width:90vw;text-align:center}
 #toast.show{opacity:1;transform:translateX(-50%)}
 @media (max-width:980px){.studio{grid-template-columns:1fr}.stagePanel{position:static}.res{grid-template-columns:1fr}.ciTop{grid-template-columns:1fr}.pkImgs{grid-template-columns:1fr;grid-template-rows:1fr 1fr}.introIn{flex-direction:column-reverse;gap:28px}.vtitle{writing-mode:horizontal-tb;letter-spacing:.2em}}
+/* ---------- 保存中のタイムラプス ---------- */
+#tl{position:fixed;inset:0;z-index:66;background:#0b1430;opacity:0;transition:opacity .8s ease;cursor:progress}
+#tl.show{opacity:1}
+#tlCv{position:absolute;inset:0;width:100%;height:100%;display:block}
+.tlDate{position:absolute;left:0;right:0;bottom:10vh;display:flex;flex-direction:column;align-items:center;color:#fff;text-shadow:0 2px 16px rgba(0,0,0,.55);transition:opacity .3s ease}
+.tlDate.fade{opacity:0}
+#tlY{font:400 13px var(--serif);letter-spacing:.9em;text-indent:.9em;opacity:.8}
+#tlMD{font:400 clamp(34px,4.6vw,56px)/1.1 var(--serif);letter-spacing:.14em;text-indent:.14em;margin-top:6px}
+#tlT{font:400 12px var(--serif);letter-spacing:.35em;text-indent:.35em;opacity:.6;margin-top:6px}
+.tlBar{position:absolute;left:50%;bottom:5.5vh;width:min(320px,60vw);height:2px;transform:translateX(-50%);background:rgba(255,255,255,.16)}
+#tlBar{display:block;height:100%;width:0;background:rgba(255,226,150,.9)}
 /* ---------- 動き（シンプルに） ---------- */
 .btn,.pill,.chip{transition:transform .16s ease,background .2s,box-shadow .2s}
 .btn:hover,.pill:hover,.chip:hover{transform:translateY(-1px)}
@@ -249,6 +260,8 @@ input[type=range]:active{transform:scaleY(1.3)}
   <label class="pill flowBtn"><span id="flowPickTxt">作る画像を選ぶ</span><input type="file" id="flowTarget" accept="image/*" hidden></label>
   <p id="flowPct">0%</p>
 </div>
+<!-- 保存中：goghの一生をタイムラプスで -->
+<div id="tl" hidden><canvas id="tlCv"></canvas><div class="tlDate" id="tlDate"><span id="tlY"></span><b id="tlMD"></b><span id="tlT"></span></div><div class="tlBar"><i id="tlBar"></i></div></div>
 <p id="tips" hidden><b>TIPS</b><span id="tipsTxt"></span></p>
 <button id="bgmBtn" type="button" aria-label="BGM" aria-pressed="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/><path class="slash" d="M3 3l18 18"/></svg></button>
 
@@ -1918,7 +1931,7 @@ function pickHighlights(photos, k) {
         if (t.time != null && c.time != null) gap = Math.min(gap, Math.abs(t.time - c.time));
         dc = Math.min(dc, Math.hypot(t.lab[0] - c.lab[0], t.lab[1] - c.lab[1], t.lab[2] - c.lab[2]));
       }
-      const sc = Math.min(gap, 6 * 3600) / 3600 + Math.min(dc, 60) / 20 + Math.random() * 0.2;
+      const sc = Math.min(gap, 6 * 3600) / 3600 + Math.min(dc, 60) / 20 + faceScore(t) * 0.8 + Math.random() * 0.2;
       if (sc > bs) { bs = sc; best = t; }
     }
     if (best) chosen.push(best);
@@ -2477,15 +2490,21 @@ async function exportImage() {
   setBusy(true); const prog = progress('#exProg');
   let cv = null;
   try {
-    cv = await renderMosaicCanvas(R, uw, uh, (p, m) => prog.set(p * 0.9, m));
+    // 保存のあいだ、goghの一生をタイムラプスで流す（保存が終わるころに、ちょうど最新の写真になる枚数にする）
+    prog.set(0.01, '思い出を選んでいます…');
+    const life = await lifeCandidates(), es = estimateExport(R, uw, uh);
+    if (life.length >= 3) Timelapse.start(pickSpread(life, clamp(Math.floor((es.render + es.enc) / 0.7), 6, life.length)), es.render + es.enc);
+    const t0 = performance.now();
+    cv = await renderMosaicCanvas(R, uw, uh, (p, m) => { prog.set(p * 0.9, m); if (p > 0.04 && Timelapse.active) Timelapse.setEstimate((performance.now() - t0) / 1000 / p + es.enc); });
     prog.set(0.92, '画像ファイルに変換しています…（大きい画像は少し時間がかかります）'); await yieldUI();
     const type = ST.fmt === 'png' ? 'image/png' : 'image/jpeg';
     const blob = await new Promise(res => cv.toBlob(res, type, 0.92));
     if (!blob) throw new Error('画像ファイルに変換できませんでした。サイズを小さくしてお試しください');
     downloadBlob(blob, `gogh-memory-art_${R.mode}_${R.cols}x${R.rows}_${uw}px.${ST.fmt === 'png' ? 'png' : 'jpg'}`);
     prog.set(1, '完了');
+    await Timelapse.finish();
     toast(`保存しました（${fmt(W)} × ${fmt(H)} px・${(blob.size / 1048576).toFixed(1)}MB）`);
-  } catch (e) { console.error(e); toast('保存に失敗しました: ' + e.message, 6000); }
+  } catch (e) { console.error(e); Timelapse.abort(); toast('保存に失敗しました: ' + e.message, 6000); }
   finally { if (cv) { cv.width = cv.height = 0; } prog.hide(); setBusy(false); }
 }
 
@@ -2736,6 +2755,157 @@ const Tips = (() => {
   };
 })();
 
+/* ================= 顔らしさ（人やアバターが写っていそうか）の簡易判定 ================= */
+// 肌色のまとまりを探し、その中や上に暗い部分（目・髪）があれば「顔らしい」とする。
+// ドアップの顔（大きなまとまり1つ）も、小さく写った何人か（小さなまとまりが複数）も点数になる
+const FC = document.createElement('canvas'); FC.width = 64; FC.height = 48;
+const FX = FC.getContext('2d', { willReadFrequently: true });
+function faceScore(t) {
+  if (t.face != null) return t.face;
+  const w = 64, h = 48, N = w * h; FX.drawImage(t.thumb, 0, 0, w, h);
+  const d = FX.getImageData(0, 0, w, h).data, skin = new Uint8Array(N), Y = new Float32Array(N);
+  for (let i = 0, p = 0; i < N; i++, p += 4) {
+    const r = d[p], g = d[p + 1], b = d[p + 2], mx = Math.max(r, g, b), mn = Math.min(r, g, b), sat = mx ? (mx - mn) / mx : 0;
+    Y[i] = 0.299 * r + 0.587 * g + 0.114 * b;
+    skin[i] = r >= g && g >= b * 0.85 && r > 110 && r - b >= 18 && r - b <= 125 && r - g <= 75 && sat >= 0.1 && sat <= 0.62 ? 1 : 0;
+  }
+  const seen = new Uint8Array(N), q = new Int32Array(N); let score = 0, blobs = 0;
+  for (let i = 0; i < N; i++) {
+    if (!skin[i] || seen[i]) continue;
+    let qh = 0, qt = 0, n = 0, x0 = w, x1 = 0, y0 = h, y1 = 0, sy = 0; q[qt++] = i; seen[i] = 1;
+    while (qh < qt) {
+      const c = q[qh++], x = c % w, y = (c / w) | 0; n++; sy += Y[c];
+      if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+      if (x > 0 && skin[c - 1] && !seen[c - 1]) { seen[c - 1] = 1; q[qt++] = c - 1; }
+      if (x < w - 1 && skin[c + 1] && !seen[c + 1]) { seen[c + 1] = 1; q[qt++] = c + 1; }
+      if (y > 0 && skin[c - w] && !seen[c - w]) { seen[c - w] = 1; q[qt++] = c - w; }
+      if (y < h - 1 && skin[c + w] && !seen[c + w]) { seen[c + w] = 1; q[qt++] = c + w; }
+    }
+    if (n < 4 || n > N * 0.6) continue;
+    const bw = x1 - x0 + 1, bh = y1 - y0 + 1;
+    if (n / (bw * bh) < 0.35 || bw > bh * 2.6 || bh > bw * 2.6) continue;
+    const my = sy / n; let dark = 0, tot = 0;
+    for (let y = Math.max(0, y0 - Math.ceil(bh * 0.4)); y <= y1; y++) for (let x = x0; x <= x1; x++) { tot++; if (Y[y * w + x] < my * 0.55) dark++; }
+    const df = dark / Math.max(1, tot); if (df < 0.04) continue;
+    blobs++; score += Math.sqrt(n / N) * (0.6 + Math.min(1, df * 4));
+  }
+  return (t.face = Math.min(2, score) + Math.min(0.6, blobs * 0.12));
+}
+const labDist = (a, b) => Math.hypot(a.lab[0] - b.lab[0], a.lab[1] - b.lab[1], a.lab[2] - b.lab[2]);
+
+// goghの一生：撮影時刻の順に並べ、連写（数十秒以内）と「時間が近くて色も似ている」写真は1枚にまとめる。
+// まとめた中からは、顔らしい写真を選ぶ
+async function lifeCandidates() {
+  const list = S.tiles.filter(t => !t.excluded && t.time != null).sort((a, b) => a.time - b.time);
+  let last = performance.now();
+  for (let i = 0; i < list.length; i++) { faceScore(list[i]); if (performance.now() - last > 30) { await yieldUI(); last = performance.now(); } }
+  const groups = []; let g = null;
+  for (const t of list) {
+    const pv = g && g[g.length - 1], dt = pv ? t.time - pv.time : Infinity;
+    if (dt < 60 || (dt < 600 && labDist(t, pv) < 12)) g.push(t); else groups.push(g = [t]);
+  }
+  return groups.map(gr => gr.reduce((b, t) => (t.face > b.face ? t : b), gr[Math.floor(gr.length / 2)]));
+}
+// F 枚に減らす：時間の順に F 区間に分け、それぞれから一番顔らしい写真を選ぶ（最初から最新まで見られる）
+function pickSpread(c, F) {
+  if (c.length <= F) return c.slice();
+  const out = [];
+  for (let k = 0; k < F; k++) {
+    const a = Math.floor(k * c.length / F), b = Math.max(a + 1, Math.floor((k + 1) * c.length / F));
+    let best = c[a]; for (let i = a; i < b; i++) if (c[i].face > best.face) best = c[i];
+    out.push(best);
+  }
+  out[0] = c[0]; out[F - 1] = c[c.length - 1]; // 一番古い写真と、一番新しい写真は必ず入れる
+  return out;
+}
+// 保存にかかる時間の見込み（秒）。写真を並べる分と、画像ファイルに変換する分
+function estimateExport(R, uw, uh) {
+  const MP = R.cols * uw * R.rows * uh / 1e6, orig = new Set();
+  for (const p of R.P) { const t = S.tiles[p.t]; if (p.w * uw > p.crop[2] * t.tw * 1.05 || p.h * uh > p.crop[3] * t.th * 1.05) orig.add(p.t); }
+  const render = 0.4 + orig.size * 0.035 + R.P.length * 0.0012 + MP * 0.03, enc = MP * (ST.fmt === 'png' ? 0.22 : 0.05);
+  return { render, enc };
+}
+
+/* ================= 保存中のタイムラプス（いちばん古い写真から最新まで） ================= */
+const Timelapse = (() => {
+  const box = $('#tl'), cv = $('#tlCv'), dateEl = $('#tlDate');
+  let ctx, W, H, raf = 0, frames = [], cur = -1, prev = -1, switchAt = 0, est = 10, t0 = 0, doneAt = 0, idxAtDone = 0, holdUntil = 0, endRes = null, ending = 0;
+  const ready = new Map(), loading = new Map();
+  function resize() { const dpr = Math.min(2, devicePixelRatio || 1); W = innerWidth; H = innerHeight; cv.width = W * dpr; cv.height = H * dpr; ctx = cv.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); }
+  function feather(b) {
+    const w = b.width, h = b.height, e = Math.max(4, Math.min(w, h) * 0.07), c = document.createElement('canvas'); c.width = w; c.height = h;
+    const x = c.getContext('2d'); x.drawImage(b, 0, 0); x.globalCompositeOperation = 'destination-in';
+    for (const [x1, y1, L] of [[w, 0, w], [0, h, h]]) { const g = x.createLinearGradient(0, 0, x1, y1), k = e / L; g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(k, '#000'); g.addColorStop(1 - k, '#000'); g.addColorStop(1, 'rgba(0,0,0,0)'); x.fillStyle = g; x.fillRect(0, 0, w, h); }
+    if (b.close) b.close(); return c;
+  }
+  function load(i) {
+    if (i < 0 || i >= frames.length || loading.has(i)) return;
+    const t = frames[i];
+    loading.set(i, (async () => {
+      let b = null;
+      try { b = await createImageBitmap(t.file, { imageOrientation: 'from-image', resizeWidth: Math.min(1200, Math.round(innerWidth * 0.8)), resizeQuality: 'medium' }); }
+      catch (e) { try { b = await decodeFile(t.file); } catch (e2) { b = null; } }
+      if (b && frames[i] === t) ready.set(i, feather(b));
+    })());
+  }
+  function setDate(t) {
+    const d = new Date(t.time * 1000), p2 = v => String(v).padStart(2, '0');
+    dateEl.classList.add('fade');
+    setTimeout(() => {
+      $('#tlY').textContent = d.getUTCFullYear(); $('#tlMD').textContent = `${d.getUTCMonth() + 1}.${p2(d.getUTCDate())}`; $('#tlT').textContent = `${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}`;
+      dateEl.classList.remove('fade');
+    }, 160);
+  }
+  function drawPhoto(i, alpha, age) {
+    const t = frames[i]; if (!t) return;
+    const src = ready.get(i) || featherOf(t), sw = src.width, sh = src.height;
+    const k = Math.min(W * 0.74 / sw, H * 0.6 / sh) * (1 + 0.035 * Math.min(1, age / 4)), w = sw * k, h = sh * k;
+    ctx.globalAlpha = alpha; ctx.drawImage(src, W / 2 - w / 2, H * 0.42 - h / 2, w, h); ctx.globalAlpha = 1;
+  }
+  function frame(now) {
+    const sec = (now - t0) / 1000, F = frames.length;
+    if (!drawArt(ctx, ART['blue-night'], W, H, 1.2, Math.sin(sec * 0.04), 0.2 * Math.sin(sec * 0.05))) { ctx.fillStyle = '#16285a'; ctx.fillRect(0, 0, W, H); }
+    ctx.fillStyle = 'rgba(6,10,28,.5)'; ctx.fillRect(0, 0, W, H);
+    // 予想した保存時間に合わせて進む。保存が先に終わったら、残りを早送り
+    let pos = Math.min(0.985, sec / Math.max(0.5, est)), idx = Math.floor(pos * F);
+    if (doneAt) idx = Math.min(F - 1, idxAtDone + Math.floor((now - doneAt) / 110));
+    idx = Math.max(cur, Math.min(F - 1, idx));
+    if (idx !== cur) {
+      prev = cur; cur = idx; switchAt = now; setDate(frames[cur]);
+      for (let j = cur; j <= cur + 3; j++) load(j);
+      for (const k of [...ready.keys()]) if (k < cur - 1) ready.delete(k);
+    }
+    const dur = doneAt ? 0.1 : Math.max(0.15, est / F * 0.6), f = Math.min(1, (now - switchAt) / 1000 / dur);
+    if (prev >= 0 && f < 1) drawPhoto(prev, 1 - f, (now - switchAt) / 1000 + 2);
+    drawPhoto(cur, f, (now - switchAt) / 1000);
+    $('#tlBar').style.width = (doneAt ? (cur + 1) / F : pos) * 100 + '%';
+    if (doneAt && cur >= F - 1) {
+      if (!holdUntil) holdUntil = now + 1800;
+      else if (now > holdUntil && !ending) { ending = now; box.classList.remove('show'); setTimeout(stop, 800); }
+    }
+    raf = requestAnimationFrame(frame);
+  }
+  function stop() { cancelAnimationFrame(raf); box.hidden = true; box.classList.remove('show'); lockInput(false); ready.clear(); loading.clear(); frames = []; const r = endRes; endRes = null; if (r) r(); }
+  return {
+    get active() { return frames.length > 0; },
+    start(list, estSec) {
+      frames = list; cur = -1; prev = -1; est = estSec; doneAt = 0; holdUntil = 0; ending = 0; ready.clear(); loading.clear();
+      for (let j = 0; j < 4; j++) load(j);
+      resize(); box.hidden = false; lockInput(true); requestAnimationFrame(() => box.classList.add('show'));
+      t0 = performance.now(); raf = requestAnimationFrame(frame);
+    },
+    setEstimate(sec) { const el = (performance.now() - t0) / 1000; est = Math.max(el + 0.5, est * 0.6 + sec * 0.4); },
+    finish() {
+      return new Promise(res => {
+        if (!frames.length) { res(); return; }
+        endRes = res; doneAt = performance.now(); idxAtDone = Math.max(0, cur);
+        setTimeout(() => { if (endRes === res) stop(); }, 3000 + frames.length * 130); // 画面が止まっていても終わらせる
+      });
+    },
+    abort() { if (frames.length || !box.hidden) stop(); },
+  };
+})();
+
 /* ================= 効果音（控えめ。BGM のオン・オフに合わせる） ================= */
 const Sfx = (() => {
   const NAMES = ['hover', 'click', 'tick', 'confirm', 'back', 'open', 'toggle', 'select'];
@@ -2804,7 +2974,7 @@ const BGM = (() => {
 refreshButtons();
 onSettingsChanged();
 // 動作確認用
-window.mosaic = { _sfx: Sfx, addTileFiles, setTarget, build, evaluateOptions, autoCorrection, openPicker, rankTargets, state: S, settings: ST, _assignTiles: assignTiles, _solveFree: solveFree, runSim, _bgm: BGM, _planFor: t => planFor(t || S.target), checkResult, _showCellInfo: i => showCellInfo(i), _flow: Flow, _make: Make,
+window.mosaic = { _sfx: Sfx, _tl: Timelapse, _life: lifeCandidates, _pick: pickSpread, _face: faceScore, exportImage, addTileFiles, setTarget, build, evaluateOptions, autoCorrection, openPicker, rankTargets, state: S, settings: ST, _assignTiles: assignTiles, _solveFree: solveFree, runSim, _bgm: BGM, _planFor: t => planFor(t || S.target), checkResult, _showCellInfo: i => showCellInfo(i), _flow: Flow, _make: Make,
   _meanErr: (cells, tf, assign, lim) => { let s = 0; for (let i = 0; i < cells.C; i++) { const t = assign[i]; adjMean(tf.M5[t * 5], tf.M5[t * 5 + 1], tf.M5[t * 5 + 2], tf.M5[t * 5 + 3], tf.M5[t * 5 + 4], cells.M5[i * 5], cells.M5[i * 5 + 1], cells.M5[i * 5 + 2], cells.M5[i * 5 + 3], cells.M5[i * 5 + 4], lim); s += Math.sqrt(AJ[7]); } return s / cells.C; } };
 })();
 </script>
