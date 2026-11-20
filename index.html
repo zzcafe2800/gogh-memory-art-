@@ -203,6 +203,20 @@ h4{font:600 12px var(--serif);letter-spacing:.12em;color:var(--sub);margin:12px 
 #toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(10px);background:rgba(35,28,21,.94);color:#fff;padding:9px 16px;border-radius:12px;font-size:.85rem;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;z-index:95;max-width:90vw;text-align:center}
 #toast.show{opacity:1;transform:translateX(-50%)}
 @media (max-width:980px){.studio{grid-template-columns:1fr}.stagePanel{position:static}.res{grid-template-columns:1fr}.ciTop{grid-template-columns:1fr}.pkImgs{grid-template-columns:1fr;grid-template-rows:1fr 1fr}.introIn{flex-direction:column-reverse;gap:28px}.vtitle{writing-mode:horizontal-tb;letter-spacing:.2em}}
+/* ---------- 動き（シンプルに） ---------- */
+.btn,.pill,.chip{transition:transform .16s ease,background .2s,box-shadow .2s}
+.btn:hover,.pill:hover,.chip:hover{transform:translateY(-1px)}
+.btn:active,.pill:active,.chip:active{transform:scale(.96)}
+.seg button{transition:background .18s,color .18s,transform .12s}
+.seg button:active{transform:scale(.94)}
+input[type=range]{transition:transform .15s}
+input[type=range]:active{transform:scaleY(1.3)}
+.panel{animation:rise .45s ease both}
+.modal:not([hidden]){animation:fadeIn .2s ease}
+.modal:not([hidden]) .mbox{animation:rise .25s ease both}
+@keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
 </head>
 <body>
@@ -212,7 +226,7 @@ h4{font:600 12px var(--serif);letter-spacing:.12em;color:var(--sub);margin:12px 
   <div class="introSide">
     <div class="introCopy">
       <h1 class="vtitle">ゴッホ思い出ア<span class="vbar">ー</span>ト</h1>
-      <p class="introLead">思い出の写真で、<br>一枚の絵を。</p>
+      <p class="introLead">思い出の写真たちを、<br>一枚の画像に。</p>
     </div>
     <div class="drop" id="tileDrop">
       <p class="dropHead">gogh写真ファイルをここへ</p>
@@ -2539,7 +2553,7 @@ const starsOf = est => { const n = est < 8 ? 5 : est < 12 ? 4 : est < 16 ? 3 : e
 async function openPicker() {
   if (S.busy) { toast('処理中です。終わってからお試しください'); return; }
   if (activeCount() < 20) { toast('素材の写真を20枚以上入れると使えます'); return; }
-  $('#picker').hidden = false; PK.open = true; const tok = ++PK.tok;
+  $('#picker').hidden = false; PK.open = true; const tok = ++PK.tok; Sfx.play('open');
   $('#pkGrid').innerHTML = ''; $('#pkMore').hidden = true; $('#pkCount').textContent = 'きれいに作れる順を計算しています…';
   await new Promise(r => setTimeout(r, 30));
   const list = await rankTargets(p => { if (tok === PK.tok) $('#pkCount').textContent = `きれいに作れる順を計算しています… ${Math.round(p * 100)}%`; });
@@ -2596,7 +2610,7 @@ function reviewPick(cands) {
       if (sel.size) S.version++;
       box.hidden = true; res();
     };
-    box.hidden = false; draw();
+    box.hidden = false; Sfx.play('open'); draw();
   });
 }
 
@@ -2719,6 +2733,43 @@ const Tips = (() => {
   };
 })();
 
+/* ================= 効果音（控えめ。BGM のオン・オフに合わせる） ================= */
+const Sfx = (() => {
+  const NAMES = ['hover', 'click', 'tick', 'confirm', 'back', 'open', 'toggle', 'select'];
+  const VOL = { hover: 0.35, click: 0.8, tick: 0.45, confirm: 1, back: 0.8, open: 0.8, toggle: 0.8, select: 0.7 }, GAP = { tick: 70 }, MASTER = 0.22;
+  let ac = null, master = null; const buf = {}, last = {};
+  async function init() {
+    if (ac) return;
+    try {
+      ac = new (window.AudioContext || window.webkitAudioContext)(); master = ac.createGain(); master.gain.value = MASTER; master.connect(ac.destination);
+      await Promise.all(NAMES.map(async n => { try { buf[n] = await ac.decodeAudioData(await (await fetch(`assets/sfx/${n}.ogg`)).arrayBuffer()); } catch (e) { /* 鳴らないだけ */ } }));
+    } catch (e) { ac = null; }
+  }
+  function play(n) {
+    if (!ac || !buf[n] || localStorage.getItem('bgmMute') === '1') return;
+    const now = performance.now(); if (now - (last[n] || 0) < (GAP[n] || 45)) return; last[n] = now;
+    if (ac.state === 'suspended') ac.resume();
+    const src = ac.createBufferSource(), g = ac.createGain(); src.buffer = buf[n]; g.gain.value = VOL[n]; src.connect(g); g.connect(master); src.start();
+  }
+  const HOT = 'button:not(:disabled),label.pill,label.btn,.chip,.pkItem,select';
+  addEventListener('pointerdown', init, { capture: true, once: true });
+  let hov = null;
+  addEventListener('pointerover', e => {
+    const el = e.target.closest ? e.target.closest(HOT) : null;
+    if (el === hov) return; hov = el; if (el && e.pointerType === 'mouse') play('hover');
+  });
+  addEventListener('click', e => {
+    const t = e.target; if (!t.closest || t.closest('input[type=file]')) return;
+    if (t.closest('#buildBtn,#revOk')) play('confirm');
+    else if (t.closest('#pkClose,#backBtn')) play('back');
+    else if (t.closest('.pkItem,.seg button')) play('select');
+    else if (t.closest('input[type=checkbox],label.chk')) play('toggle');
+    else if (t.closest(HOT)) play('click');
+  });
+  addEventListener('input', e => { if (e.target && e.target.type === 'range') play('tick'); });
+  return { play, init };
+})();
+
 /* ================= BGM（最初に画面を触ったときから、ループで流す） ================= */
 // 音源は、そのまま音声ファイルとして取り出せないよう並べ替えた形で置いてあり、ここで元に戻して再生する
 const BGM = (() => {
@@ -2750,7 +2801,7 @@ const BGM = (() => {
 refreshButtons();
 onSettingsChanged();
 // 動作確認用
-window.mosaic = { addTileFiles, setTarget, build, evaluateOptions, autoCorrection, openPicker, rankTargets, state: S, settings: ST, _assignTiles: assignTiles, _solveFree: solveFree, runSim, _bgm: BGM, _planFor: t => planFor(t || S.target), checkResult, _showCellInfo: i => showCellInfo(i), _flow: Flow, _make: Make,
+window.mosaic = { _sfx: Sfx, addTileFiles, setTarget, build, evaluateOptions, autoCorrection, openPicker, rankTargets, state: S, settings: ST, _assignTiles: assignTiles, _solveFree: solveFree, runSim, _bgm: BGM, _planFor: t => planFor(t || S.target), checkResult, _showCellInfo: i => showCellInfo(i), _flow: Flow, _make: Make,
   _meanErr: (cells, tf, assign, lim) => { let s = 0; for (let i = 0; i < cells.C; i++) { const t = assign[i]; adjMean(tf.M5[t * 5], tf.M5[t * 5 + 1], tf.M5[t * 5 + 2], tf.M5[t * 5 + 3], tf.M5[t * 5 + 4], cells.M5[i * 5], cells.M5[i * 5 + 1], cells.M5[i * 5 + 2], cells.M5[i * 5 + 3], cells.M5[i * 5 + 4], lim); s += Math.sqrt(AJ[7]); } return s / cells.C; } };
 })();
 </script>
