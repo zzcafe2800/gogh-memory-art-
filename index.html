@@ -618,6 +618,34 @@ function gridLab(t, crop, gx, gy, out, off) {
   }
 }
 const thumbSizeFor = total => total <= 1500 ? 128 : total <= 4000 ? 96 : total <= 9000 ? 64 : 48;
+// 画像ファイルの中に入っている撮影時刻（JPEG・WebP・PNG の EXIF）。なければ null
+async function readExifTime(file) {
+  try {
+    const buf = await file.slice(0, 262144).arrayBuffer(), u = new Uint8Array(buf), dv = new DataView(buf);
+    let base = -1;
+    for (let i = 0; i < u.length - 12; i++) if (u[i] === 69 && u[i + 1] === 120 && u[i + 2] === 105 && u[i + 3] === 102 && u[i + 4] === 0 && u[i + 5] === 0) { base = i + 6; break; } // "Exif\0\0"
+    if (base < 0) for (let i = 0; i < u.length - 8; i++) if (u[i] === 101 && u[i + 1] === 88 && u[i + 2] === 73 && u[i + 3] === 102) { base = i + 4; break; } // PNG の eXIf
+    if (base < 0) return null;
+    const bo = dv.getUint16(base), le = bo === 0x4949; if (!le && bo !== 0x4d4d) return null;
+    const g16 = o => dv.getUint16(base + o, le), g32 = o => dv.getUint32(base + o, le);
+    const str = (o, n) => { let r = ''; for (let k = 0; k < n && base + o + k < u.length; k++) { const c = u[base + o + k]; if (!c) break; r += String.fromCharCode(c); } return r; };
+    const ifd = off => {
+      const n = g16(off), res = {};
+      for (let k = 0; k < n; k++) {
+        const e = off + 2 + k * 12, tag = g16(e), cnt = g32(e + 4);
+        if (tag === 0x9003 || tag === 0x9004 || tag === 0x0132) res[tag] = str(cnt > 4 ? g32(e + 8) : e + 8, cnt);
+        else if (tag === 0x8769) res.exif = g32(e + 8);
+      }
+      return res;
+    };
+    const i0 = ifd(g32(4)); let t = i0[0x9003] || i0[0x9004];
+    if (!t && i0.exif) { const i1 = ifd(i0.exif); t = i1[0x9003] || i1[0x9004]; }
+    t = t || i0[0x0132];
+    const m = t && t.match(/(\d{4}):(\d\d):(\d\d)[ T](\d\d):(\d\d):(\d\d)/); if (!m) return null;
+    const [Y, Mo, D, h, mi, se] = m.slice(1).map(Number); if (Y < 1990 || Mo < 1 || Mo > 12 || D < 1 || D > 31) return null;
+    return Date.UTC(Y, Mo - 1, D, h, mi, se) / 1000;
+  } catch (e) { return null; }
+}
 async function analyzeFile(file, thumbLong) {
   const bmp = await decodeFile(file);
   const ow = bmp.width, oh = bmp.height;
@@ -654,7 +682,9 @@ async function analyzeFile(file, thumbLong) {
   satMean(t, ...(c => [c[0] * sw, c[1] * sh, (c[0] + c[2]) * sw, (c[1] + c[3]) * sh])(centerCrop(ow / oh, 1)), _lin);
   const lab = new Float32Array(3); lin2lab(_lin[0], _lin[1], _lin[2], lab, 0);
   t.lab = lab; t.rgb = [l2s(_lin[0]), l2s(_lin[1]), l2s(_lin[2])].map(Math.round); t.bin = classify(t.rgb, lab);
-  t.time = parseNameTime(file.name);
+  t.nameTime = parseNameTime(file.name);                       // ファイル名の時刻（確認の一覧に使う）
+  t.time = t.nameTime != null ? t.nameTime : await readExifTime(file); // 名前になければ、画像の中の撮影時刻
+  t.mtime = file.lastModified ? file.lastModified / 1000 - new Date().getTimezoneOffset() * 60 : null; // 最後の手段：ファイルの日時
   return t;
 }
 // ファイル名から撮影時刻（秒）を読む。例：IMG_20240512_143022.jpg / 20240512-143022.jpg / PXL_20240512_143022123.jpg / 1715494222123.jpg
@@ -741,7 +771,7 @@ async function addTileFiles(files) {
   S.failed += fail; S.version++;
   await Flow.finish(() => fp.classList.add('out'));
   fp.hidden = true; Tips.stop();
-  await reviewPick(fresh.filter(i => S.tiles[i].time == null));
+  await reviewPick(fresh.filter(i => S.tiles[i].nameTime == null));
   setBusy(false);
   showApp();
   if (fail) toast(`${fail} 枚は読み込めませんでした`);
@@ -2839,13 +2869,22 @@ const labDist = (a, b) => Math.hypot(a.lab[0] - b.lab[0], a.lab[1] - b.lab[1], a
 // goghの一生：撮影時刻の順に並べ、連写（数十秒以内）と「時間が近くて色も似ている」写真は1枚にまとめる。
 // まとめた中からは、顔らしい写真を選ぶ
 async function lifeCandidates() {
-  const list = S.tiles.filter(t => !t.excluded && t.time != null).sort((a, b) => a.time - b.time);
+  const act = S.tiles.filter(t => !t.excluded), N = act.length;
+  const withTime = act.filter(t => t.time != null);
+  const mt = new Set(act.map(t => t.mtime != null ? Math.round(t.mtime / 60) : null)); mt.delete(null);
+  let list, key, mode;
+  if (withTime.length >= 3 && withTime.length >= N * 0.5) { mode = 'time'; list = withTime.sort((a, b) => a.time - b.time); key = t => t.time; }          // 名前・画像の中の撮影時刻
+  else if (mt.size >= Math.max(3, N * 0.5)) { mode = 'mtime'; list = act.filter(t => t.mtime != null).sort((a, b) => a.mtime - b.mtime); key = t => t.mtime; } // ファイルの日時
+  else { mode = 'order'; list = act.slice().sort((a, b) => a.path.localeCompare(b.path, 'ja', { numeric: true })); key = null; }                              // 並び順
+  S.lifeMode = mode;
+  list.forEach((t, i) => { t.disp = key ? key(t) : null; t.seq = i + 1; t.seqTotal = list.length; });
   let last = performance.now();
   for (let i = 0; i < list.length; i++) { faceScore(list[i]); if (performance.now() - last > 30) { await yieldUI(); last = performance.now(); } }
   const groups = []; let g = null;
   for (const t of list) {
-    const pv = g && g[g.length - 1], dt = pv ? t.time - pv.time : Infinity;
-    if (dt < 60 || (dt < 600 && labDist(t, pv) < 12)) g.push(t); else groups.push(g = [t]);
+    const pv = g && g[g.length - 1], dt = pv && key ? key(t) - key(pv) : Infinity;
+    const same = pv && (key ? (dt < 60 || (dt < 600 && labDist(t, pv) < 12)) : labDist(t, pv) < 8); // 連写・そっくりな写真は1枚に
+    if (same) g.push(t); else groups.push(g = [t]);
   }
   return groups.map(gr => gr.reduce((b, t) => (t.face > b.face ? t : b), gr[Math.floor(gr.length / 2)]));
 }
@@ -2892,10 +2931,11 @@ const Timelapse = (() => {
     })());
   }
   function setDate(t) {
-    const d = new Date(t.time * 1000), p2 = v => String(v).padStart(2, '0');
+    const d = new Date((t.disp || 0) * 1000), p2 = v => String(v).padStart(2, '0');
     dateEl.classList.add('fade');
     setTimeout(() => {
-      $('#tlY').textContent = d.getUTCFullYear(); $('#tlMD').textContent = `${d.getUTCMonth() + 1}.${p2(d.getUTCDate())}`; $('#tlT').textContent = `${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}`;
+      if (t.disp == null) { $('#tlY').textContent = ''; $('#tlMD').textContent = t.seq; $('#tlT').textContent = `/ ${t.seqTotal}`; }
+      else { $('#tlY').textContent = d.getUTCFullYear(); $('#tlMD').textContent = `${d.getUTCMonth() + 1}.${p2(d.getUTCDate())}`; $('#tlT').textContent = `${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}`; }
       dateEl.classList.remove('fade');
     }, 160);
   }
@@ -3080,12 +3120,15 @@ function drawCover(ctx, img, W, H, zoom = 1) { const k = Math.max(W / img.width,
 function drawDateOverlay(ctx, W, H, t) {
   const g = ctx.createLinearGradient(0, H * 0.5, 0, H); g.addColorStop(0, 'rgba(6,10,28,0)'); g.addColorStop(1, 'rgba(6,10,28,.6)');
   ctx.fillStyle = g; ctx.fillRect(0, H * 0.5, W, H * 0.5);
-  const d = new Date(t.time * 1000), p2 = v => String(v).padStart(2, '0'), x = W * 0.055;
+  const d = new Date((t.disp || 0) * 1000), p2 = v => String(v).padStart(2, '0'), x = W * 0.055, noTime = t.disp == null;
   ctx.save(); ctx.fillStyle = '#fff'; ctx.textBaseline = 'alphabetic'; ctx.shadowColor = 'rgba(0,0,0,.4)'; ctx.shadowBlur = H * 0.025;
   const line = (txt, size, sp, y, a) => { ctx.font = `400 ${Math.round(H * size)}px AppFont, serif`; if ('letterSpacing' in ctx) ctx.letterSpacing = Math.round(H * sp) + 'px'; ctx.globalAlpha = a; ctx.fillText(txt, x, H * y); };
-  line(String(d.getUTCFullYear()), 0.036, 0.022, 0.745, 0.85);
-  line(`${d.getUTCMonth() + 1}.${p2(d.getUTCDate())}`, 0.115, 0.008, 0.875, 1);
-  line(`${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}`, 0.032, 0.014, 0.93, 0.7);
+  if (noTime) { line(String(t.seq), 0.115, 0.008, 0.875, 1); line(`/ ${t.seqTotal}`, 0.032, 0.014, 0.93, 0.7); }
+  else {
+    line(String(d.getUTCFullYear()), 0.036, 0.022, 0.745, 0.85);
+    line(`${d.getUTCMonth() + 1}.${p2(d.getUTCDate())}`, 0.115, 0.008, 0.875, 1);
+    line(`${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}`, 0.032, 0.014, 0.93, 0.7);
+  }
   ctx.restore();
 }
 const GIF = (() => {
@@ -3104,7 +3147,7 @@ const GIF = (() => {
     const N = st.cands ? st.cands.length : 0;
     $('#gfSec').min = 4; $('#gfSec').max = Math.max(20, N * 10); $('#gfSec').value = st.sec; $('#gfPer').value = st.per;
     setSeg($('#gfQ'), st.q);
-    $('#gfInfo').innerHTML = N ? `<b>${st.count}</b> 枚・1枚 <b>${st.per.toFixed(1)}</b> 秒・全部で <b>${Math.round(st.count * st.per)}</b> 秒（候補 ${fmt(N)} 枚）` : 'ファイル名が時刻の写真がないので作れません';
+    $('#gfInfo').innerHTML = N ? `<b>${st.count}</b> 枚・1枚 <b>${st.per.toFixed(1)}</b> 秒・全部で <b>${Math.round(st.count * st.per)}</b> 秒（候補 ${fmt(N)} 枚）` : '使える写真がありません';
   }
   const frameList = () => pickSpread(st.cands, Math.max(1, Math.min(st.count, st.cands.length)));
   function load(t, w) {
@@ -3144,7 +3187,7 @@ const GIF = (() => {
   }
   function close() { on = false; cancelAnimationFrame(raf); cv.hidden = true; }
   async function save(prog) {
-    await ensure(); if (!st.cands.length) throw new Error('ファイル名が時刻の写真がないので、GIF を作れません');
+    await ensure(); if (!st.cands.length) throw new Error('使える写真がありません');
     const fr = frameList(), W = st.q, H = Math.round(st.q * 9 / 16 / 2) * 2, c = document.createElement('canvas'); c.width = W; c.height = H;
     const ctx = c.getContext('2d', { willReadFrequently: true }); ctx.imageSmoothingQuality = 'high';
     const per = st.per, blend = fr.length > 1 ? 15 : 0, hold = Math.max(2, Math.round(per * 100) - blend), gw = GifWriter(W, H);
@@ -3250,7 +3293,7 @@ const BGM = (() => {
 refreshButtons();
 onSettingsChanged();
 // 動作確認用
-window.mosaic = { _gif: GIF, _reveal: Reveal, _GifWriter: GifWriter, _sfx: Sfx, _tl: Timelapse, _life: lifeCandidates, _pick: pickSpread, _face: faceScore, exportImage, addTileFiles, setTarget, build, evaluateOptions, autoCorrection, openPicker, rankTargets, state: S, settings: ST, _assignTiles: assignTiles, _solveFree: solveFree, runSim, _bgm: BGM, _planFor: t => planFor(t || S.target), checkResult, _showCellInfo: i => showCellInfo(i), _flow: Flow, _make: Make,
+window.mosaic = { _exif: readExifTime, _gif: GIF, _reveal: Reveal, _GifWriter: GifWriter, _sfx: Sfx, _tl: Timelapse, _life: lifeCandidates, _pick: pickSpread, _face: faceScore, exportImage, addTileFiles, setTarget, build, evaluateOptions, autoCorrection, openPicker, rankTargets, state: S, settings: ST, _assignTiles: assignTiles, _solveFree: solveFree, runSim, _bgm: BGM, _planFor: t => planFor(t || S.target), checkResult, _showCellInfo: i => showCellInfo(i), _flow: Flow, _make: Make,
   _meanErr: (cells, tf, assign, lim) => { let s = 0; for (let i = 0; i < cells.C; i++) { const t = assign[i]; adjMean(tf.M5[t * 5], tf.M5[t * 5 + 1], tf.M5[t * 5 + 2], tf.M5[t * 5 + 3], tf.M5[t * 5 + 4], cells.M5[i * 5], cells.M5[i * 5 + 1], cells.M5[i * 5 + 2], cells.M5[i * 5 + 3], cells.M5[i * 5 + 4], lim); s += Math.sqrt(AJ[7]); } return s / cells.C; } };
 })();
 </script>
