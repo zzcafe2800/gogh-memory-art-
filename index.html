@@ -176,6 +176,7 @@ h4{font:600 12px var(--serif);letter-spacing:.12em;color:var(--sub);margin:12px 
 .pkGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
 .pkItem{position:relative;border:0;padding:0;cursor:pointer;background:transparent;transition:transform .15s}
 .pkItem:hover{transform:translateY(-2px)}
+.pkItem.on canvas{outline:4px solid #e0332b;outline-offset:-4px}
 .pkItem canvas{display:block;width:100%;aspect-ratio:4/3;-webkit-mask-image:linear-gradient(90deg,transparent,#000 14px,#000 calc(100% - 14px),transparent),linear-gradient(180deg,transparent,#000 14px,#000 calc(100% - 14px),transparent);-webkit-mask-composite:source-in;mask-composite:intersect}
 .pkItem small{position:absolute;left:14px;bottom:10px;color:#fff;font-size:11px;letter-spacing:.05em;text-shadow:0 1px 4px rgba(0,0,0,.7)}
 .pkBtns{display:flex;justify-content:center;gap:12px;flex-wrap:wrap;margin-top:14px}
@@ -365,6 +366,14 @@ h4{font:600 12px var(--serif);letter-spacing:.12em;color:var(--sub);margin:12px 
     <div class="mhead"><b>おまかせ</b><span class="cnt" id="pkCount"></span><button class="xbtn" id="pkClose" title="閉じる">×</button></div>
     <div class="pkGrid" id="pkGrid"></div>
     <div class="pkBtns"><button class="btn" id="pkMore" type="button" hidden>もっと見る</button></div>
+  </div>
+</div>
+<div class="modal" id="review" hidden>
+  <div class="mbox">
+    <div class="mhead"><b>写真を確認</b><span class="cnt" id="revInfo"></span></div>
+    <p style="font-size:12.5px;color:var(--sub);margin:0 0 10px">ファイル名が時刻になっていない写真です。gogh以外のものはクリックで外してください。何も選ばなければ、すべて使います。</p>
+    <div class="pkGrid" id="revGrid"></div>
+    <div class="pkBtns"><button class="btn" id="revPrev" type="button">←</button><button class="btn" id="revNext" type="button">→</button><button class="btn primary" id="revOk" type="button">残す</button></div>
   </div>
 </div>
 <div class="tip" id="tip" hidden></div>
@@ -663,14 +672,14 @@ async function addTileFiles(files) {
   setBusy(true);
   const prog = progress('#tileProg');
   const thumbLong = thumbSizeFor(S.tiles.length + list.length);
-  let done = 0, fail = 0;
+  let done = 0, fail = 0; const fresh = [];
   const fp = $('#flowPick'); syncFlowPick(); $('#flowPct').textContent = '0%'; fp.classList.remove('out'); fp.hidden = false; // 読み込み中でも作る画像は選べる
   Tips.start();
   Flow.start(S.tiles); // 読み込みながら、写真が奥行きをもって流れていく演出（ボタン以外の操作はできない）
   $('#intro').classList.add('gone');
   try {
     await pool(list, 4, async ([f, key]) => {
-      try { const t = await analyzeFile(f, thumbLong); t.key = key; S.tiles.push(t); Flow.push(t); }
+      try { const t = await analyzeFile(f, thumbLong); t.key = key; S.tiles.push(t); fresh.push(S.tiles.length - 1); Flow.push(t); }
       catch (e) { fail++; S.keys.delete(key); }
       done++;
       Flow.progress(done / list.length); $('#flowPct').textContent = Math.floor(done / list.length * 100) + '%';
@@ -679,6 +688,7 @@ async function addTileFiles(files) {
   S.failed += fail; S.version++;
   await Flow.finish(() => fp.classList.add('out'));
   fp.hidden = true; Tips.stop();
+  await reviewPick(fresh.filter(i => S.tiles[i].time == null));
   setBusy(false);
   showApp();
   if (fail) toast(`${fail} 枚は読み込めませんでした`);
@@ -1878,11 +1888,31 @@ function renderMini(R, maxW, maxH) {
   const cv = document.createElement('canvas'); cv.width = R2.cols * R2.uw; cv.height = R2.rows * R2.uh; cv.getContext('2d').putImageData(R2.out, 0, 0);
   return cv;
 }
+// 時間が離れていて、色も似ていない写真を k 枚選ぶ
+function pickHighlights(photos, k) {
+  const chosen = [];
+  for (let j = 0; j < k && chosen.length < photos.length; j++) {
+    let best = null, bs = -Infinity;
+    for (let s = 0; s < 40; s++) {
+      const t = photos[(Math.random() * photos.length) | 0];
+      if (chosen.includes(t)) continue;
+      let gap = Infinity, dc = Infinity;
+      for (const c of chosen) {
+        if (t.time != null && c.time != null) gap = Math.min(gap, Math.abs(t.time - c.time));
+        dc = Math.min(dc, Math.hypot(t.lab[0] - c.lab[0], t.lab[1] - c.lab[1], t.lab[2] - c.lab[2]));
+      }
+      const sc = Math.min(gap, 6 * 3600) / 3600 + Math.min(dc, 60) / 20 + Math.random() * 0.2;
+      if (sc > bs) { bs = sc; best = t; }
+    }
+    if (best) chosen.push(best);
+  }
+  return chosen;
+}
 let YMS = 40; // 重い計算の途中で画面に戻る間隔（アニメ中は短くしてなめらかに）
 const Make = (() => {
   const cv = $('#make'); let ctx, W, H, raf = 0, t0 = 0, last = 0, cards = [], photos = [];
   let box = null, prov = null, rects = [], order = [], committed = null, cctx = null, nShown = 0, pops = [], target = 0, shown = 0;
-  let finals = [], flashes = [], hl = null, nextHl = 0, ending = null, MIN_MS = 9000;
+  let finals = [], flashes = [], hls = [], nextHl = 0, ending = null, MIN_MS = 9000;
   function resize() {
     const dpr = Math.min(2, devicePixelRatio || 1); W = innerWidth; H = innerHeight; cv.width = W * dpr; cv.height = H * dpr;
     ctx = cv.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -1943,21 +1973,27 @@ const Make = (() => {
       ctx.strokeStyle = `rgba(255,236,150,${1 - q})`; ctx.lineWidth = 2 + 4 * (1 - q);
       ctx.strokeRect(box.x + f.x * box.w - 3 * q, box.y + f.y * box.h - 3 * q, f.w * box.w + 6 * q, f.h * box.h + 6 * q);
     }
-    // ときどき1枚の思い出が手前に大きく現れて、絵の中へ吸い込まれていく
-    if (!ending && now > nextHl && photos.length) { const t = photos[(Math.random() * photos.length) | 0]; hl = { t, at: now }; nextHl = now + 3200 + Math.random() * 1800; }
-    if (hl) {
-      const q = (now - hl.at) / 2600, t = hl.t, base = Math.min(W, H) * 0.36, ar = t.tw / t.th, w = ar >= 1 ? base : base * ar, h = ar >= 1 ? base / ar : base;
-      if (q >= 1) hl = null;
-      else {
-        let s, a, x = W / 2, y = H / 2, rot = -0.05;
-        if (q < 0.2) { const e = q / 0.2; s = 0.7 + 0.3 * e; a = e; }
-        else if (q < 0.68) { s = 1 + 0.04 * (q - 0.2); a = 1; }
-        else { const e = (q - 0.68) / 0.32, ee = e * e; s = 1.02 - 0.95 * ee; a = 1 - ee * 0.7; x = W / 2 + (box.x + box.w * hl.tx - W / 2) * ee; y = H / 2 + (box.y + box.h * hl.ty - H / 2) * ee; rot = -0.05 + 0.4 * ee; }
-        if (hl.tx == null) { hl.tx = Math.random(); hl.ty = Math.random(); }
-        ctx.fillStyle = `rgba(8,14,36,${0.35 * a})`; ctx.fillRect(0, 0, W, H);
-        drawPhotoCard(ctx, t, x, y, w * s, h * s, rot, a, 34);
-      }
+    // ときどき1〜5枚の思い出が手前に現れて、絵の中へ吸い込まれていく（時間が離れていて、色の違う写真）
+    if (!ending && now > nextHl && photos.length) {
+      const n = 1 + ((Math.random() * 5) | 0);
+      hls = pickHighlights(photos, n).map((t, k) => ({ t, at: now, k, n, tx: Math.random(), ty: Math.random() }));
+      nextHl = now + 3600 + Math.random() * 1800;
     }
+    const shows = [];
+    for (const h of hls) {
+      const q = (now - h.at) / 2600; if (q >= 1) continue;
+      const t = h.t, f = h.n === 1 ? 0.36 : h.n <= 3 ? 0.28 : 0.22, base = Math.min(W, H) * f, ar = t.tw / t.th;
+      const w = ar >= 1 ? base : base * ar, hh = ar >= 1 ? base / ar : base;
+      const ang = (h.k / h.n) * Math.PI * 2 - Math.PI / 2 + 0.4, rad = h.n === 1 ? 0 : Math.min(W, H) * 0.2;
+      const px = W / 2 + Math.cos(ang) * rad * 1.3, py = H / 2 + Math.sin(ang) * rad;
+      let s, a, x = px, y = py, rot = -0.05 + h.k * 0.04;
+      if (q < 0.2) { const e = q / 0.2; s = 0.7 + 0.3 * e; a = e; }
+      else if (q < 0.68) { s = 1 + 0.04 * (q - 0.2); a = 1; }
+      else { const e = (q - 0.68) / 0.32, ee = e * e; s = 1.02 - 0.95 * ee; a = 1 - ee * 0.7; x = px + (box.x + box.w * h.tx - px) * ee; y = py + (box.y + box.h * h.ty - py) * ee; rot += 0.4 * ee; }
+      shows.push({ t, x, y, w: w * s, h: hh * s, rot, a });
+    }
+    if (shows.length) { const am = Math.max(...shows.map(v => v.a)); ctx.fillStyle = `rgba(8,14,36,${0.35 * am})`; ctx.fillRect(0, 0, W, H); }
+    for (const v of shows) drawPhotoCard(ctx, v.t, v.x, v.y, v.w, v.h, v.rot, v.a);
     for (const c of cards) if (c.z >= 0.8) drawPhotoCard(ctx, c.t, c.cx, c.cy, c.w * c.s, c.h * c.s, c.rot, c.al, 22);
     // 進み具合は細い光の線だけ
     ctx.fillStyle = 'rgba(255,240,190,.15)'; ctx.fillRect(box.x, box.y + box.h + 18, box.w, 2);
@@ -1980,7 +2016,7 @@ const Make = (() => {
       order = Array.from({ length: rects.length / 5 }, (_, i) => i); shuffle(order, mulberry32(Date.now() | 0));
       committed = document.createElement('canvas'); committed.width = prov.width; committed.height = prov.height; cctx = committed.getContext('2d');
       cctx.fillStyle = 'rgba(255,250,235,.04)'; cctx.fillRect(0, 0, committed.width, committed.height);
-      photos = activeIdx().map(i => S.tiles[i]); cards = []; pops = []; finals = []; flashes = []; hl = null; nShown = 0; target = 0; shown = 0; ending = null;
+      photos = activeIdx().map(i => S.tiles[i]); cards = []; pops = []; finals = []; flashes = []; hls = []; nShown = 0; target = 0; shown = 0; ending = null;
       for (let i = 0; i < 14; i++) addCard(true);
       cv.hidden = false; lockInput(true); YMS = 18;
       t0 = last = performance.now(); nextHl = t0 + 1600;
@@ -2531,6 +2567,39 @@ async function pickTile(ti) {
 function closePicker() { $('#picker').hidden = true; PK.open = false; PK.tok++; }
 window.addEventListener('keydown', e => { if (PK.open && e.key === 'Escape') closePicker(); });
 
+/* ================= 読み込み後の確認：時刻の名前でない写真を一覧にして、外せる ================= */
+// 残すボタンで確定。何も選ばなければ、すべて使う
+function reviewPick(cands) {
+  return new Promise(res => {
+    if (!cands.length) { res(); return; }
+    const PER = 24, sel = new Set(), pages = Math.ceil(cands.length / PER); let page = 0;
+    const box = $('#review'), grid = $('#revGrid');
+    const draw = () => {
+      grid.innerHTML = '';
+      for (const ti of cands.slice(page * PER, page * PER + PER)) {
+        const t = S.tiles[ti], b = document.createElement('button');
+        b.type = 'button'; b.className = 'pkItem' + (sel.has(ti) ? ' on' : ''); b.title = t.name;
+        const cv = document.createElement('canvas'); cv.width = 200; cv.height = 150;
+        const c = cv.getContext('2d'); c.imageSmoothingQuality = 'high'; drawCrop(c, t, centerCrop(t.ow / t.oh, 4 / 3), 0, 0, 200, 150);
+        const lab = document.createElement('small'); lab.textContent = sel.has(ti) ? '外す' : '残す';
+        b.append(cv, lab);
+        b.addEventListener('click', () => { if (sel.has(ti)) sel.delete(ti); else sel.add(ti); draw(); });
+        grid.append(b);
+      }
+      $('#revInfo').textContent = `${page + 1} / ${pages} ページ ・ 外す ${sel.size} 枚`;
+      $('#revPrev').disabled = page === 0; $('#revNext').disabled = page >= pages - 1;
+    };
+    $('#revPrev').onclick = () => { if (page > 0) { page--; draw(); } };
+    $('#revNext').onclick = () => { if (page < pages - 1) { page++; draw(); } };
+    $('#revOk').onclick = () => {
+      for (const ti of sel) S.tiles[ti].excluded = true;
+      if (sel.size) S.version++;
+      box.hidden = true; res();
+    };
+    box.hidden = false; draw();
+  });
+}
+
 /* ================= 画面の操作 ================= */
 function setSeg(el, v) { $$('button[data-v]', el).forEach(b => b.classList.toggle('on', b.dataset.v === String(v))); }
 function setupSeg(sel, onChange) {
@@ -2645,7 +2714,7 @@ const Tips = (() => {
   const el = $('#tips'), tx = $('#tipsTxt'); let timer = 0, k = (Math.random() * LIST.length) | 0, n = 0;
   const next = () => { el.classList.add('fade'); setTimeout(() => { tx.textContent = LIST[k++ % LIST.length]; el.classList.remove('fade'); }, 600); };
   return {
-    start() { n++; if (n > 1) return; tx.textContent = LIST[k++ % LIST.length]; el.classList.remove('fade'); el.hidden = false; timer = setInterval(next, 7000); },
+    start() { n++; if (n > 1) return; tx.textContent = LIST[k++ % LIST.length]; el.classList.remove('fade'); el.hidden = false; timer = setInterval(next, 16000); },
     stop() { n = Math.max(0, n - 1); if (n) return; clearInterval(timer); el.hidden = true; },
   };
 })();
